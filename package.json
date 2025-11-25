@@ -1,0 +1,41 @@
+{
+  "name": "realcoderuz-elonbot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js & node admin.js",
+    "dev": "concurrently \"nodemon bot.js\" \"nodemon admin.js\" \"npm run dev:frontend\"",
+    "dev:frontend": "cd admin && npm run dev",
+    "bot": "node bot.js",
+    "admin": "node admin.js",
+    "frontend": "cd admin && npm run dev",
+    "seed": "node seed-admin.js",
+    "seed:update": "node seed-admin.js --update-password",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "SaidqodirxonUz <SaidqodirxonUz@gmail.com>",
+  "license": "ISC",
+  "repository": "https://github.com/SaidqodirxonUz/RealCoderUz-ElonBot.git",
+  "dependencies": {
+    "axios": "^1.6.2",
+    "bcryptjs": "^3.0.3",
+    "body-parser": "^2.2.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "ejs": "^3.1.10",
+    "express": "^5.1.0",
+    "express-session": "^1.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "moment-timezone": "^0.5.45",
+    "mongoose": "^8.0.3",
+    "multer": "^2.0.2",
+    "node-schedule": "^2.1.1",
+    "sharp": "^0.34.5",
+    "telegraf": "^4.14.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
