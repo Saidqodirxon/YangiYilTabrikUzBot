@@ -6,8 +6,9 @@ import {
   updateCertificate,
   generateCertificate,
   uploadFont,
+  default as api,
+  API_BASE,
 } from "../utils/api";
-import axios from "axios";
 
 function Certificates() {
   const [certificates, setCertificates] = useState([]);
@@ -194,7 +195,7 @@ function Certificates() {
 
       if (response.data.success) {
         setGeneratedImage(
-          "http://localhost:3000" + response.data.imageUrl + "?t=" + Date.now()
+          API_BASE + response.data.imageUrl + "?t=" + Date.now()
         );
         if (!autoRun) alert("✅ " + response.data.message);
       }
@@ -223,9 +224,7 @@ function Certificates() {
 
     try {
       const token = localStorage.getItem("token");
-      await axios.delete(`/certificates/${cert._id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      await api.delete(`/certificates/${cert._id}`);
       alert("✅ Template o'chirildi");
       fetchCertificates();
     } catch (error) {
