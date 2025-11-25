@@ -99,6 +99,28 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// --- Optional lightweight HTTP server for bot process (health checks) ---
+// This allows running the bot process under PM2 and exposing a simple port.
+const expressHealth = require("express");
+const botApp = expressHealth();
+const BOT_PORT = process.env.BOT_PORT || 9808;
+
+botApp.get("/health", (req, res) => {
+  return res.json({
+    ok: true,
+    uptime: process.uptime(),
+    botUser: process.env.BOT_USER || null,
+  });
+});
+
+botApp.get("/", (req, res) => {
+  res.send("Bot process running");
+});
+
+botApp.listen(BOT_PORT, () => {
+  console.log(`🤖 Bot health server listening on http://localhost:${BOT_PORT}`);
+});
+
 async function sendWithRetry(fn, maxRetries = 3) {
   for (let i = 0; i < maxRetries; i++) {
     try {
