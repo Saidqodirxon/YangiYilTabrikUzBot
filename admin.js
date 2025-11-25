@@ -122,9 +122,14 @@ app.set("views", path.join(__dirname, "views"));
 
 // CORS Configuration - Bu birinchi bo'lishi kerak!
 const corsOptions = {
-  // Allow all origins (open CORS)
-  origin: "*",
-  credentials: false,
+  // Ruxsat berilgan originlar: admin frontend (9809), dev frontend (5174), bot health (9808)
+  origin: [
+    "http://localhost:9809",
+    "http://45.153.190.132:9809",
+    "http://localhost:5174",
+    "http://localhost:9808",
+  ],
+  credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
   exposedHeaders: ["Content-Range", "X-Content-Range"],
