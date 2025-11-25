@@ -26,24 +26,18 @@ function Settings() {
       }
 
       // Get current publish channel setting
-      const settingsResponse = await axios.get(
-        "http://localhost:3000/api/settings/publish_channel_id",
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
+      const settingsResponse = await axios.get("/settings/publish_channel_id", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       console.log("Publish channel response:", settingsResponse.data);
       if (settingsResponse.data.success && settingsResponse.data.value) {
         setPublishChannelId(settingsResponse.data.value);
       }
 
       // Get bot about text
-      const botAboutResponse = await axios.get(
-        "http://localhost:3000/api/settings/bot_about",
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
+      const botAboutResponse = await axios.get("/settings/bot_about", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       console.log("Bot about response:", botAboutResponse.data);
       if (botAboutResponse.data.success && botAboutResponse.data.value) {
         setBotAbout(botAboutResponse.data.value);
@@ -60,7 +54,7 @@ function Settings() {
       setSaving(true);
       const token = localStorage.getItem("token");
       const response = await axios.post(
-        "http://localhost:3000/api/settings",
+        "/settings",
         {
           key: "publish_channel_id",
           value: publishChannelId,
@@ -85,7 +79,7 @@ function Settings() {
       setSaving(true);
       const token = localStorage.getItem("token");
       const response = await axios.post(
-        "http://localhost:3000/api/settings",
+        "/settings",
         {
           key: "bot_about",
           value: botAbout,

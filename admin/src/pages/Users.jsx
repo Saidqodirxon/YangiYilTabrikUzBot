@@ -20,7 +20,7 @@ function Users() {
     setLoading(true);
     try {
       const response = await axios.get(
-        `http://localhost:3000/api/users?page=${page}&search=${search}&filter=${filter}`,
+        `/users?page=${page}&search=${search}&filter=${filter}`,
         {
           headers: {
             Authorization: `Bearer ${localStorage.getItem("token")}`,
@@ -54,8 +54,8 @@ function Users() {
     try {
       const token = localStorage.getItem("token");
       const endpoint = isBlocked
-        ? `http://localhost:3000/api/users/${userId}/unblock`
-        : `http://localhost:3000/api/users/${userId}/block`;
+        ? `/users/${userId}/unblock`
+        : `/users/${userId}/block`;
 
       const response = await axios.post(
         endpoint,

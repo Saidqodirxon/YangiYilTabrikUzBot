@@ -19,12 +19,9 @@ export const AuthProvider = ({ children }) => {
 
   const verifyToken = async (token) => {
     try {
-      const response = await axios.get(
-        "http://localhost:3000/api/auth/verify",
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
+      const response = await axios.get("/auth/verify", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
       if (response.data.success) {
         setUser(response.data.user);
@@ -40,13 +37,10 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (loginName, password) => {
     try {
-      const response = await axios.post(
-        "http://localhost:3000/api/auth/login",
-        {
-          login: loginName,
-          password,
-        }
-      );
+      const response = await axios.post("/auth/login", {
+        login: loginName,
+        password,
+      });
 
       if (response.data.success) {
         const { token, user: userData } = response.data;

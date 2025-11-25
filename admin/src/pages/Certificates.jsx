@@ -223,7 +223,7 @@ function Certificates() {
 
     try {
       const token = localStorage.getItem("token");
-      await axios.delete(`http://localhost:3000/api/certificates/${cert._id}`, {
+      await axios.delete(`/certificates/${cert._id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       alert("✅ Template o'chirildi");
