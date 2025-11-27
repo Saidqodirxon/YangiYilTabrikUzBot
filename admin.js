@@ -1,5 +1,4 @@
 const express = require("express");
-const session = require("express-session");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
@@ -155,7 +154,6 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-app.use(express.static(path.join(__dirname, "public")));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
@@ -267,7 +265,7 @@ app.post("/api/auth/login", async (req, res) => {
       message: "Noto'g'ri parol!",
     });
   } catch (error) {
-    console.error("Login xatolik:", error);
+    // ...existing code...
     res.status(500).json({
       success: false,
       message: "Server xatolik",
@@ -487,7 +485,7 @@ app.post("/api/congrats/:id/approve", authenticateToken, async (req, res) => {
             );
           }
 
-          console.log(`✅ Kanal ${targetChannel.channelName} ga yuborildi`);
+          // ...existing code...
         } catch (channelSendError) {
           console.error(
             `❌ ${targetChannel.channelName} ga yuborishda xatolik:`,
@@ -495,7 +493,7 @@ app.post("/api/congrats/:id/approve", authenticateToken, async (req, res) => {
           );
         }
       } else {
-        console.log("⚠️ Tabrik yuborish uchun faol kanal topilmadi");
+        // ...existing code...
       }
     } catch (channelError) {
       console.error("Kanalga yuborishda xatolik:", channelError);
@@ -521,7 +519,7 @@ app.post("/api/congrats/:id/approve", authenticateToken, async (req, res) => {
         `<b>✅ Tabrikingiz tasdiqlandi va kanalga joylandi!${channelLink}</b>`,
         { parse_mode: "HTML" }
       );
-      console.log(`✅ User ${congrats.userId} ga xabar yuborildi`);
+      // ...existing code...
     } catch (notifyError) {
       console.error("Userga xabar yuborishda xatolik:", notifyError.message);
     }
