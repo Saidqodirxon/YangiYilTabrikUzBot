@@ -2,6 +2,13 @@ const { Telegraf, Scenes, session, Markup } = require("telegraf");
 require("dotenv/config");
 const axios = require("axios");
 const moment = require("moment-timezone");
+const express = require("express");
+const bodyParser = require("body-parser");
+const cors = require("cors");
+const jwt = require("jsonwebtoken");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
 
 // Database
 const db = require("./modules/db");
@@ -29,12 +36,26 @@ const {
   getCertificate,
   getAllCertificates,
   updateCertificate,
+  updateCertificateById,
   createBroadcast,
   updateBroadcast,
   getBroadcastStats,
   getAdmin,
+  getAllAdmins,
+  createAdmin,
+  updateAdmin,
+  deleteAdmin,
   checkAdminPermission,
+  blockUser,
+  unblockUser,
 } = require("./modules/functions");
+const {
+  generateCertificate,
+  getImageInfo,
+} = require("./modules/imageProcessor");
+const Admin = require("./models/Admin");
+const Certificate = require("./models/Certificate");
+const Channel = require("./models/Channel");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 db();
@@ -51,12 +72,77 @@ const adminUser = process.env.ADMIN_USER;
 const adminId = parseInt(process.env.ADMIN_ID);
 const adminGroupId = process.env.ADMIN_GROUP_ID || null; // Admin group for notifications
 const botUser = process.env.BOT_USER;
-const ISLOM_API_LINK = "http://islomapi.uz/api";
-const CERTIFICATE_API = "https://apis.realcoder.uz/api/newyear/";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const JWT_SECRET = process.env.JWT_SECRET || "bayramona-jwt-secret-key-2025";
+const ADMIN_PORT = process.env.ADMIN_PORT || 9809;
 
 // Telegram limits
 const TELEGRAM_RATE_LIMIT = 30; // 30 xabar per soniya
 const BATCH_DELAY = 1000; // 1 soniya
+
+// Uploads papkasini yaratish va eski generated rasmlarni tozalash
+const uploadsDir = path.join(__dirname, "uploads");
+const templatesDir = path.join(uploadsDir, "templates");
+const fontsDir = path.join(uploadsDir, "fonts");
+const generatedDir = path.join(uploadsDir, "generated");
+
+[uploadsDir, templatesDir, fontsDir, generatedDir].forEach((dir) => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+});
+
+// 1 soatdan eski generated rasmlarni avtomatik o'chirish
+setInterval(() => {
+  try {
+    const files = fs.readdirSync(generatedDir);
+    const now = Date.now();
+    files.forEach((file) => {
+      const filePath = path.join(generatedDir, file);
+      const stat = fs.statSync(filePath);
+      if (now - stat.mtimeMs > 60 * 60 * 1000) {
+        fs.unlinkSync(filePath);
+      }
+    });
+  } catch (e) {
+    // ignore
+  }
+}, 10 * 60 * 1000); // har 10 daqiqada tekshiradi
+
+// Multer configuration
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const type = req.body.type || "templates";
+    const dir = type === "font" ? fontsDir : templatesDir;
+    cb(null, dir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  },
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (req, file, cb) => {
+    const allowedImages = /jpeg|jpg|png|gif|webp/;
+    const allowedFonts = /ttf|otf|woff|woff2/;
+    const extname = path.extname(file.originalname).toLowerCase();
+
+    if (file.fieldname === "font") {
+      if (allowedFonts.test(extname.slice(1))) {
+        return cb(null, true);
+      }
+    } else if (file.fieldname === "image") {
+      if (allowedImages.test(extname.slice(1))) {
+        return cb(null, true);
+      }
+    }
+
+    cb(new Error("Faqat rasm yoki font fayllari!"));
+  },
+});
 
 const tumanData = {
   regions: [
@@ -99,13 +185,54 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// --- Optional lightweight HTTP server for bot process (health checks) ---
-// This allows running the bot process under PM2 and exposing a simple port.
-const expressHealth = require("express");
-const botApp = expressHealth();
-const BOT_PORT = process.env.BOT_PORT || 9808;
+// ============ EXPRESS API SERVER ============
+const app = express();
 
-botApp.get("/health", (req, res) => {
+// CORS Configuration
+const corsOptions = {
+  origin: [
+    "http://localhost:9809",
+    "http://45.153.190.132:9809",
+    "http://localhost:5174",
+    "http://localhost:9808",
+    "https://yangiyilbot.saidqodirxon.uz",
+    "https://yangiyilbotadmin.saidqodirxon.uz",
+  ],
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  exposedHeaders: ["Content-Range", "X-Content-Range"],
+  maxAge: 86400,
+};
+
+app.use(cors(corsOptions));
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json());
+
+// JWT middleware
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).json({ success: false, message: "Token topilmadi" });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({
+        success: false,
+        message: "Token noto'g'ri yoki muddati o'tgan",
+      });
+    }
+    req.user = user;
+    next();
+  });
+}
+
+// Health check endpoint
+app.get("/health", (req, res) => {
   return res.json({
     ok: true,
     uptime: process.uptime(),
@@ -113,12 +240,859 @@ botApp.get("/health", (req, res) => {
   });
 });
 
-botApp.get("/", (req, res) => {
-  res.send("Bot process running");
+app.get("/", (req, res) => {
+  res.send("Bot + Admin API running");
 });
 
-botApp.listen(BOT_PORT, () => {
-  console.log(`🤖 Bot health server listening on http://localhost:${BOT_PORT}`);
+// ============ API ROUTES ============
+
+// Login API
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { login, password } = req.body;
+
+    if (login && password) {
+      const admin = await Admin.findOne({ login, isActive: true });
+
+      if (!admin) {
+        return res.status(401).json({
+          success: false,
+          message: "Login yoki parol noto'g'ri!",
+        });
+      }
+
+      const isMatch = await admin.comparePassword(password);
+
+      if (!isMatch) {
+        return res.status(401).json({
+          success: false,
+          message: "Login yoki parol noto'g'ri!",
+        });
+      }
+
+      admin.lastLogin = getTashkentTime().toDate();
+      await admin.save();
+
+      const token = jwt.sign(
+        {
+          userId: admin.userId,
+          login: admin.login,
+          role: admin.role,
+          permissions: admin.permissions,
+          timestamp: Date.now(),
+        },
+        JWT_SECRET,
+        { expiresIn: "24h" }
+      );
+
+      return res.json({
+        success: true,
+        token,
+        user: {
+          userId: admin.userId,
+          login: admin.login,
+          firstName: admin.firstName,
+          role: admin.role,
+          permissions: admin.permissions,
+        },
+        message: "Login muvaffaqiyatli",
+      });
+    }
+
+    if (password === ADMIN_PASSWORD) {
+      const token = jwt.sign(
+        { admin: true, timestamp: Date.now() },
+        JWT_SECRET,
+        { expiresIn: "24h" }
+      );
+
+      return res.json({
+        success: true,
+        token,
+        message: "Login muvaffaqiyatli",
+      });
+    }
+
+    res.status(401).json({
+      success: false,
+      message: "Noto'g'ri parol!",
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Server xatolik",
+    });
+  }
+});
+
+// Verify Token API
+app.get("/api/auth/verify", authenticateToken, (req, res) => {
+  res.json({
+    success: true,
+    user: req.user,
+  });
+});
+
+// Stats API
+app.get("/api/stats", authenticateToken, async (req, res) => {
+  try {
+    const userCount = await getUsersCount();
+    const approvedCount = await getApprovedCongratsCount();
+    const pendingCount = await getPendingCongratsCount();
+    const broadcastStats = await getBroadcastStats();
+    const channels = await getAllChannels();
+
+    res.json({
+      success: true,
+      data: {
+        users: userCount,
+        approvedCongrats: approvedCount,
+        pendingCongrats: pendingCount,
+        broadcasts: broadcastStats,
+        channels: channels.length,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Users API
+app.get("/api/users", authenticateToken, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 50;
+    const skip = (page - 1) * limit;
+    const search = req.query.search || "";
+    const filter = req.query.filter || "all";
+
+    let allUsers = await getAllUsers();
+
+    if (filter === "active") {
+      allUsers = allUsers.filter((u) => !u.is_block);
+    } else if (filter === "blocked") {
+      allUsers = allUsers.filter((u) => u.is_block);
+    }
+
+    if (search) {
+      const searchLower = search.toLowerCase();
+      allUsers = allUsers.filter(
+        (u) =>
+          u.userId.toString().includes(search) ||
+          (u.firstName && u.firstName.toLowerCase().includes(searchLower)) ||
+          (u.lastName && u.lastName.toLowerCase().includes(searchLower)) ||
+          (u.username && u.username.toLowerCase().includes(searchLower))
+      );
+    }
+
+    const totalUsers = allUsers.length;
+    const users = allUsers.slice(skip, skip + limit);
+    const totalPages = Math.ceil(totalUsers / limit);
+
+    res.json({
+      success: true,
+      data: { users, currentPage: page, totalPages, totalUsers },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Block/Unblock User API
+app.post("/api/users/:userId/block", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    await blockUser(parseInt(userId));
+    res.json({ success: true, message: "User bloklandi" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post("/api/users/:userId/unblock", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    await unblockUser(parseInt(userId));
+    res.json({ success: true, message: "User blokdan chiqarildi" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Congrats API
+app.get("/api/congrats", authenticateToken, async (req, res) => {
+  try {
+    const congrats = await getPendingCongratsForAdmin();
+    res.json({ success: true, data: congrats });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post("/api/congrats/:id/approve", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const congrats = await getCongrats(id);
+
+    if (!congrats) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Tabrik topilmadi" });
+    }
+
+    await updateCongrats(id, {
+      adminApproved: true,
+      rejectedByAdmin: false,
+      publishedToChannel: true,
+      publishedAt: getTashkentTime().toDate(),
+    });
+
+    try {
+      const publishChannelIdSetting = await getSetting("publish_channel_id");
+      const publishChannelId = publishChannelIdSetting || null;
+      let targetChannel = null;
+
+      if (publishChannelId) {
+        targetChannel = await Channel.findOne({
+          channelId: publishChannelId,
+          isActive: true,
+        });
+      } else {
+        targetChannel = await Channel.findOne({ isActive: true }).sort({
+          order: 1,
+        });
+      }
+
+      if (targetChannel) {
+        try {
+          let messageText = `🎊 Yangi tabrik!\n\n👤 ${congrats.firstName}`;
+          if (congrats.username) messageText += ` (@${congrats.username})`;
+
+          if (congrats.messageType === "text" && congrats.message) {
+            messageText += `\n\n${congrats.message}`;
+            await bot.telegram.sendMessage(
+              targetChannel.channelId,
+              messageText
+            );
+          } else if (congrats.messageType === "photo" && congrats.fileId) {
+            await bot.telegram.sendPhoto(
+              targetChannel.channelId,
+              congrats.fileId,
+              {
+                caption:
+                  messageText +
+                  (congrats.caption ? `\n\n${congrats.caption}` : ""),
+              }
+            );
+          } else if (congrats.messageType === "video" && congrats.fileId) {
+            await bot.telegram.sendVideo(
+              targetChannel.channelId,
+              congrats.fileId,
+              {
+                caption:
+                  messageText +
+                  (congrats.caption ? `\n\n${congrats.caption}` : ""),
+              }
+            );
+          }
+        } catch (channelSendError) {
+          // Channel send error
+        }
+      }
+    } catch (channelError) {
+      // Channel error
+    }
+
+    try {
+      let channelLink = "";
+      const publishChannelIdSetting = await getSetting("publish_channel_id");
+      if (publishChannelIdSetting) {
+        const targetChannel = await Channel.findOne({
+          channelId: publishChannelIdSetting,
+          isActive: true,
+        });
+        if (targetChannel && targetChannel.channelUsername) {
+          channelLink = `\n\n📢 <a href="https://t.me/${targetChannel.channelUsername}">Tabrikingizni ko'rish</a>`;
+        }
+      }
+      await bot.telegram.sendMessage(
+        congrats.userId,
+        `<b>✅ Tabrikingiz tasdiqlandi va kanalga joylandi!${channelLink}</b>`,
+        { parse_mode: "HTML" }
+      );
+    } catch (notifyError) {
+      // Notify error
+    }
+
+    res.json({
+      success: true,
+      message: "Tabrik tasdiqlandi va kanalga yuborildi",
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post("/api/congrats/:id/reject", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const congrats = await getCongrats(id);
+
+    if (!congrats) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Tabrik topilmadi" });
+    }
+
+    const rejectionReason = req.body.reason || "Qoidalarga mos kelmagan";
+
+    await updateCongrats(id, {
+      rejectedByAdmin: true,
+      adminApproved: false,
+      rejectionReason: rejectionReason,
+    });
+
+    try {
+      await bot.telegram.sendMessage(
+        congrats.userId,
+        `<b>❌ Tabrikingiz admin tomonidan tasdiqlanmadi</b>\n\n<b>Sababi:</b> ${rejectionReason}\n\n💡 <i>Qayta urinib ko'ring va qoidalarga rioya qiling</i>`,
+        { parse_mode: "HTML" }
+      );
+    } catch (notifyError) {
+      // Notify error
+    }
+
+    res.json({ success: true, message: "Tabrik rad etildi" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Channels API
+app.get("/api/channels", authenticateToken, async (req, res) => {
+  try {
+    const channels = await getAllChannels();
+    res.json({ success: true, data: channels });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post("/api/channels", authenticateToken, async (req, res) => {
+  try {
+    const {
+      channelId,
+      channelUsername,
+      channelName,
+      channelIcon,
+      isRequired,
+      order,
+    } = req.body;
+
+    if (!channelId || !channelUsername) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Channel ID va Username majburiy" });
+    }
+
+    await createChannel({
+      channelId,
+      channelUsername,
+      channelName: channelName || channelUsername,
+      channelIcon: channelIcon || "📢",
+      isRequired: isRequired !== undefined ? isRequired : true,
+      order: order || 1,
+      isActive: true,
+    });
+
+    res.json({ success: true, message: "Kanal qo'shildi" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.put("/api/channels/:id/toggle", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const channel = await getChannel(id);
+
+    if (!channel) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Kanal topilmadi" });
+    }
+
+    await updateChannel(id, { isRequired: !channel.isRequired });
+    res.json({ success: true, message: "Kanal holati o'zgartirildi" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.delete("/api/channels/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await deleteChannel(id);
+    res.json({ success: true, message: "Kanal o'chirildi" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Certificates API
+app.get("/api/certificates", authenticateToken, async (req, res) => {
+  try {
+    const certificates = await getAllCertificates();
+    res.json({ success: true, data: certificates });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post(
+  "/api/certificates",
+  authenticateToken,
+  upload.fields([
+    { name: "image", maxCount: 1 },
+    { name: "font", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      if (!req.files || !req.files.image) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Rasm yuklanmadi" });
+      }
+
+      const { templateNumber, name, textConfig, width, height } = req.body;
+
+      if (!templateNumber || !name) {
+        if (req.files.image) fs.unlinkSync(req.files.image[0].path);
+        if (req.files.font) fs.unlinkSync(req.files.font[0].path);
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "Template raqami va nomi majburiy",
+          });
+      }
+
+      const imageInfo = await getImageInfo(req.files.image[0].path);
+
+      if (!imageInfo.success) {
+        if (req.files.image) fs.unlinkSync(req.files.image[0].path);
+        if (req.files.font) fs.unlinkSync(req.files.font[0].path);
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "Rasm ma'lumotlarini olishda xatolik",
+          });
+      }
+
+      let parsedTextConfig = {};
+      if (textConfig) {
+        try {
+          parsedTextConfig = JSON.parse(textConfig);
+        } catch (e) {
+          parsedTextConfig = {};
+        }
+      }
+
+      if (req.files.font) {
+        parsedTextConfig.fontPath = req.files.font[0].path;
+        parsedTextConfig.fontFamily = req.files.font[0].originalname.replace(
+          /\.(ttf|otf)$/i,
+          ""
+        );
+      }
+
+      await createCertificate({
+        templateNumber: parseInt(templateNumber),
+        name: name,
+        imagePath: req.files.image[0].path,
+        width: width ? parseInt(width) : imageInfo.width,
+        height: height ? parseInt(height) : imageInfo.height,
+        textConfig: parsedTextConfig,
+        isActive: true,
+      });
+
+      res.json({
+        success: true,
+        message: "Template qo'shildi",
+        data: {
+          path: req.files.image[0].path,
+          width: width ? parseInt(width) : imageInfo.width,
+          height: height ? parseInt(height) : imageInfo.height,
+        },
+      });
+    } catch (error) {
+      if (req.files) {
+        if (req.files.image && fs.existsSync(req.files.image[0].path))
+          fs.unlinkSync(req.files.image[0].path);
+        if (req.files.font && fs.existsSync(req.files.font[0].path))
+          fs.unlinkSync(req.files.font[0].path);
+      }
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+);
+
+app.put("/api/certificates/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { textConfig, width, height } = req.body;
+
+    const updateData = {};
+    if (textConfig) updateData.textConfig = textConfig;
+    if (width) updateData.width = width;
+    if (height) updateData.height = height;
+
+    await updateCertificateById(id, updateData);
+    res.json({ success: true, message: "Template yangilandi" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.delete("/api/certificates/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const template = await Certificate.findById(id);
+
+    if (!template) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Template topilmadi" });
+    }
+
+    try {
+      if (fs.existsSync(template.imagePath)) fs.unlinkSync(template.imagePath);
+    } catch (fileError) {
+      // File delete error
+    }
+
+    await Certificate.findByIdAndDelete(id);
+    res.json({ success: true, message: "Template o'chirildi" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Generate Certificate API
+app.post("/api/generate-certificate", authenticateToken, async (req, res) => {
+  try {
+    const { templateId, text } = req.body;
+
+    if (!templateId || !text) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Template ID va matn majburiy" });
+    }
+
+    const template = await Certificate.findById(templateId);
+    if (!template || !template.isActive) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Template topilmadi" });
+    }
+
+    const outputFilename = `cert_${Date.now()}.png`;
+    const outputPath = path.join(generatedDir, outputFilename);
+
+    const result = await generateCertificate({
+      imagePath: template.imagePath,
+      text: text,
+      textConfig: template.textConfig,
+      outputPath: outputPath,
+    });
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: "Sertifikat yaratildi",
+        imageUrl: `/uploads/generated/${outputFilename}`,
+      });
+    } else {
+      res.status(500).json({ success: false, message: result.error });
+    }
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Broadcast API
+app.get("/api/broadcast/stats", authenticateToken, async (req, res) => {
+  try {
+    const stats = await getBroadcastStats();
+    res.json({ success: true, data: stats });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post("/api/broadcast", authenticateToken, async (req, res) => {
+  try {
+    const { message } = req.body;
+
+    if (!message || !message.trim()) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Xabar matni kiritilmagan" });
+    }
+
+    const users = await getAllUsers();
+    let sent = 0;
+    let failed = 0;
+
+    const broadcast = await createBroadcast({
+      message,
+      totalUsers: users.length,
+      sentCount: 0,
+      failedCount: 0,
+      status: "processing",
+    });
+
+    for (let i = 0; i < users.length; i++) {
+      try {
+        await bot.telegram.sendMessage(users[i].userId, message, {
+          parse_mode: "HTML",
+        });
+        sent++;
+        if ((i + 1) % 30 === 0)
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+      } catch (error) {
+        failed++;
+      }
+    }
+
+    await updateBroadcast(broadcast._id, {
+      sentCount: sent,
+      failedCount: failed,
+      status: "completed",
+      completedAt: getTashkentTime().toDate(),
+    });
+
+    res.json({
+      success: true,
+      message: "Xabar yuborish yakunlandi",
+      sent,
+      failed,
+      total: users.length,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Font Upload API
+app.post(
+  "/api/upload-font",
+  authenticateToken,
+  upload.single("font"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Font fayli yuklanmadi" });
+      }
+
+      res.json({
+        success: true,
+        message: "Font yuklandi",
+        data: {
+          fontPath: req.file.path,
+          fontName: req.file.originalname,
+          relativePath: `/uploads/fonts/${req.file.filename}`,
+        },
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+);
+
+// User Block/Unblock API (alternative)
+app.put("/api/users/:id/block", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = await getUser(id);
+
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User topilmadi" });
+    }
+
+    await updateUser(id, { is_block: !user.is_block });
+    res.json({
+      success: true,
+      message: user.is_block ? "User blokdan chiqarildi" : "User bloklandi",
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Admin Management API
+app.get("/api/admins", authenticateToken, async (req, res) => {
+  try {
+    const admins = await getAllAdmins();
+    res.json({ success: true, data: admins });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post("/api/admins", authenticateToken, async (req, res) => {
+  try {
+    const { userId, firstName, lastName, username, role, permissions } =
+      req.body;
+
+    if (!userId || !firstName) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "userId va firstName talab qilinadi",
+        });
+    }
+
+    const currentAdmin = await getAdmin(req.user.userId);
+    if (!currentAdmin || currentAdmin.role !== "superadmin") {
+      return res
+        .status(403)
+        .json({
+          success: false,
+          message: "Faqat superadmin yangi admin qo'sha oladi",
+        });
+    }
+
+    const newAdmin = await createAdmin(userId, firstName, req.user.userId, {
+      lastName,
+      username,
+      role,
+      permissions,
+    });
+    res.json({
+      success: true,
+      message: "Admin muvaffaqiyatli qo'shildi",
+      data: newAdmin,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.put("/api/admins/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+
+    const currentAdmin = await getAdmin(req.user.userId);
+    if (!currentAdmin || currentAdmin.role !== "superadmin") {
+      return res
+        .status(403)
+        .json({
+          success: false,
+          message: "Faqat superadmin admin ma'lumotlarini tahrirlashi mumkin",
+        });
+    }
+
+    const updatedAdmin = await updateAdmin(id, updateData);
+
+    if (!updatedAdmin) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Admin topilmadi" });
+    }
+
+    res.json({
+      success: true,
+      message: "Admin muvaffaqiyatli yangilandi",
+      data: updatedAdmin,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.delete("/api/admins/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const currentAdmin = await getAdmin(req.user.userId);
+    if (!currentAdmin || currentAdmin.role !== "superadmin") {
+      return res
+        .status(403)
+        .json({
+          success: false,
+          message: "Faqat superadmin adminni o'chira oladi",
+        });
+    }
+
+    if (req.user.userId === parseInt(id)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "O'zingizni o'chira olmaysiz" });
+    }
+
+    const deletedAdmin = await deleteAdmin(id);
+
+    if (!deletedAdmin) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Admin topilmadi" });
+    }
+
+    res.json({ success: true, message: "Admin muvaffaqiyatli o'chirildi" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.get("/api/admins/check/:userId", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const admin = await getAdmin(userId);
+    res.json({ success: true, isAdmin: !!admin, data: admin || null });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Settings API
+app.get("/api/settings/:key", authenticateToken, async (req, res) => {
+  try {
+    const { key } = req.params;
+    const value = await getSetting(key);
+    res.json({ success: true, value: value });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post("/api/settings", authenticateToken, async (req, res) => {
+  try {
+    const { key, value, description } = req.body;
+
+    if (!key) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Key talab qilinadi" });
+    }
+
+    const setting = await setSetting(key, value, description);
+    res.json({ success: true, message: "Sozlama saqlandi", data: setting });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Start API server
+app.listen(ADMIN_PORT, () => {
+  console.log(`🌐 Admin API: http://localhost:${ADMIN_PORT}`);
 });
 
 async function sendWithRetry(fn, maxRetries = 3) {

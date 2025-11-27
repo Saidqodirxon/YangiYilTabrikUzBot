@@ -1,23 +1,14 @@
 module.exports = {
   apps: [
     {
-      name: "yangi-backend",
-      script: "admin.js",
+      name: "bayramona-bot",
+      script: "bot.js",
       cwd: "./",
       env: {
         NODE_ENV: "production",
-        ADMIN_PORT: 9808
+        ADMIN_PORT: 9809,
       },
-      watch: false
+      watch: false,
     },
-    {
-      name: "yangi-frontend",
-      script: "serve-frontend.js",
-      cwd: "./",
-      env: {
-        NODE_ENV: "production"
-      },
-      watch: false
-    }
-  ]
+  ],
 };
