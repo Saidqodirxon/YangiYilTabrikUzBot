@@ -128,6 +128,8 @@ const corsOptions = {
     "http://45.153.190.132:9809",
     "http://localhost:5174",
     "http://localhost:9808",
+    "https://yangiyilbot.saidqodirxon.uz",
+    "https://yangiyilbotadmin.saidqodirxon.uz",
   ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
