@@ -65,7 +65,7 @@ const {
 } = require("./modules/functions");
 
 const app = express();
-const PORT = process.env.ADMIN_PORT || 9809;
+const PORT = process.env.ADMIN_PORT || 9808;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const JWT_SECRET = process.env.JWT_SECRET || "bayramona-jwt-secret-key-2025";
 
@@ -145,27 +145,7 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
-// If a built admin frontend exists (Vite build -> admin/dist), serve it as static
-const adminDistPath = path.join(__dirname, "admin", "dist");
-if (fs.existsSync(adminDistPath)) {
-  app.use(express.static(adminDistPath));
-
-  // Fallback to index.html for SPA routes (but allow /api/* to continue to API)
-  app.get("/", (req, res) => {
-    res.sendFile(path.join(adminDistPath, "index.html"));
-  });
-
-  app.get("/*", (req, res, next) => {
-    if (
-      req.path.startsWith("/api") ||
-      req.path.startsWith("/uploads") ||
-      req.path.startsWith("/public")
-    ) {
-      return next();
-    }
-    res.sendFile(path.join(adminDistPath, "index.html"));
-  });
-}
+// No frontend static serving here. Only API and uploads on 9808.
 
 app.use(
   session({
