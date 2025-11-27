@@ -69,7 +69,7 @@ const PORT = process.env.ADMIN_PORT || 9808;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const JWT_SECRET = process.env.JWT_SECRET || "bayramona-jwt-secret-key-2025";
 
-// Uploads papkasini yaratish
+// Uploads papkasini yaratish va eski generated rasmlarni tozalash
 const uploadsDir = path.join(__dirname, "uploads");
 const templatesDir = path.join(uploadsDir, "templates");
 const fontsDir = path.join(uploadsDir, "fonts");
@@ -80,6 +80,23 @@ const generatedDir = path.join(uploadsDir, "generated");
     fs.mkdirSync(dir, { recursive: true });
   }
 });
+
+// 1 soatdan eski generated rasmlarni avtomatik o‘chirish
+setInterval(() => {
+  try {
+    const files = fs.readdirSync(generatedDir);
+    const now = Date.now();
+    files.forEach((file) => {
+      const filePath = path.join(generatedDir, file);
+      const stat = fs.statSync(filePath);
+      if (now - stat.mtimeMs > 60 * 60 * 1000) {
+        fs.unlinkSync(filePath);
+      }
+    });
+  } catch (e) {
+    // ignore
+  }
+}, 10 * 60 * 1000); // har 10 daqiqada tekshiradi
 
 // Multer configuration
 const storage = multer.diskStorage({
@@ -117,8 +134,6 @@ const upload = multer({
 });
 
 // Middleware
-app.set("view engine", "ejs");
-app.set("views", path.join(__dirname, "views"));
 
 // CORS Configuration - Bu birinchi bo'lishi kerak!
 const corsOptions = {
@@ -147,15 +162,6 @@ app.use(bodyParser.json());
 
 // No frontend static serving here. Only API and uploads on 9808.
 
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET || "bayramona-secret-key",
-    resave: false,
-    saveUninitialized: false,
-    cookie: { maxAge: 24 * 60 * 60 * 1000 }, // 24 soat
-  })
-);
-
 // JWT middleware
 function authenticateToken(req, res, next) {
   const authHeader = req.headers["authorization"];
@@ -175,14 +181,6 @@ function authenticateToken(req, res, next) {
     req.user = user;
     next();
   });
-}
-
-// Auth middleware for EJS pages
-function isAuthenticated(req, res, next) {
-  if (req.session && req.session.isAdmin) {
-    return next();
-  }
-  res.redirect("/login");
 }
 
 // MongoDB ulanish
@@ -1260,323 +1258,6 @@ app.post("/api/settings", authenticateToken, async (req, res) => {
       message: error.message,
     });
   }
-});
-
-// ============ EJS ROUTES (Session based) ============
-
-// Login
-app.get("/login", (req, res) => {
-  res.render("login", { error: null });
-});
-
-app.post("/login", (req, res) => {
-  const { password } = req.body;
-
-  if (password === ADMIN_PASSWORD) {
-    req.session.isAdmin = true;
-    res.redirect("/");
-  } else {
-    res.render("login", { error: "Noto'g'ri parol!" });
-  }
-});
-
-// Logout
-app.get("/logout", (req, res) => {
-  req.session.destroy();
-  res.redirect("/login");
-});
-
-// Dashboard
-app.get("/", isAuthenticated, async (req, res) => {
-  try {
-    const userCount = await getUsersCount();
-    const approvedCount = await getApprovedCongratsCount();
-    const pendingCount = await getPendingCongratsCount();
-    const broadcastStats = await getBroadcastStats();
-    const channels = await getAllChannels();
-
-    res.render("dashboard", {
-      userCount,
-      approvedCount,
-      pendingCount,
-      broadcastStats,
-      channelCount: channels.length,
-      page: "dashboard",
-    });
-  } catch (error) {
-    console.error("Dashboard xatolik:", error);
-    res.render("dashboard", {
-      userCount: 0,
-      approvedCount: 0,
-      pendingCount: 0,
-      broadcastStats: { total: 0, completed: 0 },
-      channelCount: 0,
-      page: "dashboard",
-    });
-  }
-});
-
-// Users
-app.get("/users", isAuthenticated, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = 50;
-    const skip = (page - 1) * limit;
-
-    const allUsers = await getAllUsers();
-    const totalUsers = allUsers.length;
-    const users = allUsers.slice(skip, skip + limit);
-    const totalPages = Math.ceil(totalUsers / limit);
-
-    res.render("users", {
-      users,
-      page: "users",
-      currentPage: page,
-      totalPages,
-      totalUsers,
-    });
-  } catch (error) {
-    console.error("Users xatolik:", error);
-    res.render("users", {
-      users: [],
-      page: "users",
-      currentPage: 1,
-      totalPages: 1,
-      totalUsers: 0,
-    });
-  }
-});
-
-// Congrats
-app.get("/congrats", isAuthenticated, async (req, res) => {
-  try {
-    const pending = await getPendingCongratsForAdmin();
-
-    res.render("congrats", {
-      congrats: pending,
-      page: "congrats",
-    });
-  } catch (error) {
-    console.error("Congrats xatolik:", error);
-    res.render("congrats", {
-      congrats: [],
-      page: "congrats",
-    });
-  }
-});
-
-// Congrats approve
-app.post("/congrats/:id/approve", isAuthenticated, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const congrats = await getCongrats(id);
-
-    if (!congrats) {
-      return res.json({ success: false, message: "Topilmadi" });
-    }
-
-    await updateCongrats(id, {
-      adminApproved: true,
-      publishedToChannel: true,
-      publishedAt: getTashkentTime().toDate(),
-    });
-
-    // TODO: Kanalga yuborish logikasi (bot.js orqali)
-
-    res.json({ success: true, message: "Tasdiqlandi" });
-  } catch (error) {
-    console.error("Approve xatolik:", error);
-    res.json({ success: false, message: "Xatolik" });
-  }
-});
-
-// Congrats reject
-app.post("/congrats/:id/reject", isAuthenticated, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { reason } = req.body;
-
-    await updateCongrats(id, {
-      rejectedByAdmin: true,
-      rejectionReason: reason || "Admin tomonidan rad etildi",
-    });
-
-    res.json({ success: true, message: "Rad etildi" });
-  } catch (error) {
-    console.error("Reject xatolik:", error);
-    res.json({ success: false, message: "Xatolik" });
-  }
-});
-
-// Channels
-app.get("/channels", isAuthenticated, async (req, res) => {
-  try {
-    const channels = await getAllChannels();
-
-    res.render("channels", {
-      channels,
-      page: "channels",
-    });
-  } catch (error) {
-    console.error("Channels xatolik:", error);
-    res.render("channels", {
-      channels: [],
-      page: "channels",
-    });
-  }
-});
-
-// Channel add
-app.post("/channels/add", isAuthenticated, async (req, res) => {
-  try {
-    const { channelId, username, name } = req.body;
-
-    const existing = await getChannel(channelId);
-    if (existing) {
-      return res.json({ success: false, message: "Kanal mavjud" });
-    }
-
-    const channels = await getAllChannels();
-    await createChannel({
-      channelId,
-      channelUsername: username,
-      channelName: name,
-      isRequired: true,
-      order: channels.length + 1,
-    });
-
-    res.json({ success: true, message: "Kanal qo'shildi" });
-  } catch (error) {
-    console.error("Add channel xatolik:", error);
-    res.json({ success: false, message: "Xatolik" });
-  }
-});
-
-// Channel toggle required
-app.post("/channels/:id/toggle", isAuthenticated, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const channel = await getChannel(id);
-
-    if (!channel) {
-      return res.json({ success: false, message: "Topilmadi" });
-    }
-
-    await updateChannel(id, { isRequired: !channel.isRequired });
-
-    res.json({ success: true, message: "O'zgartirildi" });
-  } catch (error) {
-    console.error("Toggle xatolik:", error);
-    res.json({ success: false, message: "Xatolik" });
-  }
-});
-
-// Channel delete
-app.post("/channels/:id/delete", isAuthenticated, async (req, res) => {
-  try {
-    const { id } = req.params;
-    await deleteChannel(id);
-
-    res.json({ success: true, message: "O'chirildi" });
-  } catch (error) {
-    console.error("Delete xatolik:", error);
-    res.json({ success: false, message: "Xatolik" });
-  }
-});
-
-// Certificates
-app.get("/certificates", isAuthenticated, async (req, res) => {
-  try {
-    const certificates = await getAllCertificates();
-
-    res.render("certificates", {
-      certificates,
-      page: "certificates",
-    });
-  } catch (error) {
-    console.error("Certificates xatolik:", error);
-    res.render("certificates", {
-      certificates: [],
-      page: "certificates",
-    });
-  }
-});
-
-// Certificate add
-app.post("/certificates/add", isAuthenticated, async (req, res) => {
-  try {
-    const { templateNumber, width, height, name } = req.body;
-
-    const existing = await getCertificate(parseInt(templateNumber));
-    if (existing) {
-      return res.json({ success: false, message: "Template mavjud" });
-    }
-
-    await createCertificate({
-      templateNumber: parseInt(templateNumber),
-      width: parseInt(width),
-      height: parseInt(height),
-      name,
-    });
-
-    res.json({ success: true, message: "Qo'shildi" });
-  } catch (error) {
-    console.error("Add cert xatolik:", error);
-    res.json({ success: false, message: "Xatolik" });
-  }
-});
-
-// Broadcast
-app.get("/broadcast", isAuthenticated, async (req, res) => {
-  try {
-    const stats = await getBroadcastStats();
-
-    res.render("broadcast", {
-      stats,
-      page: "broadcast",
-    });
-  } catch (error) {
-    console.error("Broadcast xatolik:", error);
-    res.render("broadcast", {
-      stats: { total: 0, completed: 0, lastBroadcast: null },
-      page: "broadcast",
-    });
-  }
-});
-
-// Settings
-app.get("/settings", isAuthenticated, (req, res) => {
-  res.render("settings", {
-    page: "settings",
-    adminPassword: ADMIN_PASSWORD,
-    botToken: process.env.BOT_TOKEN,
-    dbUrl: process.env.DB_URL,
-  });
-});
-
-// API endpoints
-app.get("/api/stats", isAuthenticated, async (req, res) => {
-  try {
-    const userCount = await getUsersCount();
-    const approvedCount = await getApprovedCongratsCount();
-    const pendingCount = await getPendingCongratsCount();
-
-    res.json({
-      success: true,
-      data: {
-        users: userCount,
-        approved: approvedCount,
-        pending: pendingCount,
-      },
-    });
-  } catch (error) {
-    res.json({ success: false, message: "Xatolik" });
-  }
-});
-
-// 404
-app.use((req, res) => {
-  res.status(404).render("404", { page: "" });
 });
 
 // Statistika adminga yuborish funksiyasi
